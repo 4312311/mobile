@@ -65,7 +65,7 @@ if (typeof window.FriendsCircle === 'undefined') {
       }
 
       // 检查内容长度是否合理（太长可能包含了其他内容）
-      if (content.length > 1000) {
+      if (content.length > 5000) {
         console.log(`[Friends Circle] ❌ 内容过长，可能包含无关内容: ${content.length} 字符`);
         return false;
       }
