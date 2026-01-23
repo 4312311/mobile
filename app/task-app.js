@@ -24,9 +24,9 @@ if (typeof window.TaskApp === 'undefined') {
     }
 
     init() {
-      console.log('[Task App] 任务应用初始化开始 - 版本 2.0');
+      console.log('[Task App] 任务应用初始化开始 - 版本 3.0 (事件驱动 + 族会目标)');
 
-      // 立即解析一次任务信息
+      // 立即从变量管理器读取一次族会目标
       this.parseTasksFromContext();
 
       // 异步初始化监控，避免阻塞界面渲染
@@ -34,101 +34,22 @@ if (typeof window.TaskApp === 'undefined') {
         this.setupContextMonitor();
       }, 100);
 
-      console.log('[Task App] 任务应用初始化完成 - 版本 2.0');
+      console.log('[Task App] 任务应用初始化完成 - 版本 3.0');
     }
 
     // 设置上下文监控
     setupContextMonitor() {
       console.log('[Task App] 设置上下文监控...');
 
-      // 监听上下文变化事件
-      if (window.addEventListener) {
-        window.addEventListener('contextUpdate', event => {
-          this.handleContextChange(event);
-        });
-
-        // 监听消息更新事件
-        window.addEventListener('messageUpdate', event => {
-          this.handleContextChange(event);
-        });
-
-        // 监听聊天变化事件
-        window.addEventListener('chatChanged', event => {
-          this.handleContextChange(event);
-        });
-
-        // 监听DOM变化，检测新消息
-        this.setupDOMObserver();
-      }
-
-      // 增加定时检查频率，从10秒改为3秒
-      this.contextCheckInterval = setInterval(() => {
-        this.checkContextChanges();
-      }, 5000);
-
-      // 监听SillyTavern的事件系统
+      // 不再使用定时检查，只通过事件监听
+      // 监听SillyTavern的事件系统（MESSAGE_RECEIVED 和 CHAT_CHANGED）
       this.setupSillyTavernEventListeners();
     }
 
-    // 设置DOM观察器
-    setupDOMObserver() {
-      try {
-        // 观察聊天容器的变化
-        const chatContainer =
-          document.querySelector('#chat') || document.querySelector('.mes') || document.querySelector('[data-mes]');
-        if (chatContainer) {
-          const observer = new MutationObserver(mutations => {
-            let shouldUpdate = false;
-            mutations.forEach(mutation => {
-              if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                // 检查是否添加了新的消息节点
-                mutation.addedNodes.forEach(node => {
-                  if (node.nodeType === Node.ELEMENT_NODE) {
-                    if (node.classList && (node.classList.contains('mes') || node.classList.contains('message'))) {
-                      shouldUpdate = true;
-                    }
-                  }
-                });
-              }
-            });
-
-            if (shouldUpdate) {
-              console.log('[Task App] 检测到新消息，更新任务状态');
-              setTimeout(() => {
+    // 手动刷新任务数据（在变量操作后调用）
+    refreshTasksData() {
+      console.log('[Task App] 🔄 手动刷新任务数据...');
                 this.parseTasksFromContext();
-              }, 500);
-            }
-          });
-
-          observer.observe(chatContainer, {
-            childList: true,
-            subtree: true,
-          });
-
-          console.log('[Task App] DOM观察器设置成功');
-        }
-      } catch (error) {
-        console.warn('[Task App] 设置DOM观察器失败:', error);
-      }
-    }
-
-    // 处理上下文变化
-    handleContextChange(event) {
-      console.log('[Task App] 上下文变化:', event);
-      this.parseTasksFromContext();
-    }
-
-    // 检查上下文变化
-    checkContextChanges() {
-      if (!this.isAutoRenderEnabled) return;
-
-      const currentTime = Date.now();
-      if (currentTime - this.lastRenderTime < this.renderCooldown) {
-        return;
-      }
-
-      this.parseTasksFromContext();
-      this.lastRenderTime = currentTime;
     }
 
     // 设置SillyTavern事件监听器
@@ -146,25 +67,42 @@ if (typeof window.TaskApp === 'undefined') {
         if (eventSource && event_types) {
           this.eventListenersSetup = true;
 
-          // 创建防抖函数，避免过于频繁的解析
-          const debouncedParse = this.debounce(() => {
-            this.parseTasksFromContext();
-          }, 1000);
+          // 创建延迟刷新函数（只在消息接收后刷新）
+          const handleMessageReceived = () => {
+            console.log('[Task App] 📨 收到 MESSAGE_RECEIVED 事件，刷新任务数据...');
+            setTimeout(() => {
+              // 先解析数据
+              this.parseTasksFromContext();
 
-          // 监听消息发送事件
-          if (event_types.MESSAGE_SENT) {
-            eventSource.on(event_types.MESSAGE_SENT, debouncedParse);
-          }
+              // 如果应用当前处于活动状态，强制刷新UI
+              const appContent = document.getElementById('app-content');
+              if (appContent && appContent.querySelector('.task-list')) {
+                console.log('[Task App] 🔄 强制刷新任务应用UI...');
+                appContent.innerHTML = this.getAppContent();
+                this.bindEvents();
+              }
+            }, 500);
+          };
 
-          // 监听消息接收事件
+          // 只监听消息接收事件（AI回复后）
           if (event_types.MESSAGE_RECEIVED) {
-            eventSource.on(event_types.MESSAGE_RECEIVED, debouncedParse);
+            eventSource.on(event_types.MESSAGE_RECEIVED, handleMessageReceived);
+            console.log('[Task App] ✅ 已注册 MESSAGE_RECEIVED 事件监听');
           }
 
-          // 监听聊天变化事件
+          // 监听聊天变化事件（切换对话时）
           if (event_types.CHAT_CHANGED) {
-            eventSource.on(event_types.CHAT_CHANGED, debouncedParse);
+            eventSource.on(event_types.CHAT_CHANGED, () => {
+              console.log('[Task App] 📨 聊天已切换，刷新任务数据...');
+              setTimeout(() => {
+                this.parseTasksFromContext();
+              }, 500);
+            });
+            console.log('[Task App] ✅ 已注册 CHAT_CHANGED 事件监听');
           }
+
+          // 保存引用以便后续清理
+          this.messageReceivedHandler = handleMessageReceived;
         } else {
           // 减少重试频率，从2秒改为5秒
           setTimeout(() => {
@@ -202,7 +140,7 @@ if (typeof window.TaskApp === 'undefined') {
         const completedChanged =
           JSON.stringify(taskData.completedTasks.sort()) !== JSON.stringify(this.completedTasks.sort());
 
-        // 如果有任何变化，更新数据并重新渲染
+        // 如果有任何变化，更新数据
         if (tasksChanged || acceptedChanged || completedChanged) {
           console.log('[Task App] 检测到任务状态变化:', {
             tasksChanged,
@@ -217,34 +155,124 @@ if (typeof window.TaskApp === 'undefined') {
           this.tasks = taskData.tasks;
           this.acceptedTasks = taskData.acceptedTasks;
           this.completedTasks = taskData.completedTasks;
+          console.log('[Task App] 📋 任务数据已更新');
+
+          // 只有在当前显示任务应用时才更新UI
+          if (this.isCurrentlyActive()) {
+            console.log('[Task App] 🎨 任务应用处于活动状态，更新UI...');
           this.updateTaskList();
+          } else {
+            console.log('[Task App] 💤 任务应用未激活，数据已更新但UI延迟渲染');
+          }
         }
       } catch (error) {
         console.error('[Task App] 解析任务信息失败:', error);
       }
     }
 
+    // 检查任务应用是否当前活动
+    isCurrentlyActive() {
+      const appContent = document.getElementById('app-content');
+      if (!appContent) return false;
+
+      // 检查是否包含任务应用的特征元素
+      return appContent.querySelector('.task-tabs') !== null || appContent.querySelector('.task-list') !== null;
+    }
+
     /**
-     * 从消息中获取当前任务数据
+     * 从变量管理器获取任务数据（使用 Mvu 框架 + 向上楼层查找）
      */
     getCurrentTaskData() {
       try {
-        // 优先使用mobileContextEditor获取数据
-        const mobileContextEditor = window['mobileContextEditor'];
-        if (mobileContextEditor) {
-          const chatData = mobileContextEditor.getCurrentChatData();
-          if (chatData && chatData.messages && chatData.messages.length > 0) {
-            const allContent = chatData.messages.map(msg => msg.mes || '').join('\n');
-            return this.parseTaskContent(allContent);
+        // 方法1: 使用 Mvu 框架获取变量（与shop-app一致：向上查找有变量的楼层）
+        if (window.Mvu && typeof window.Mvu.getMvuData === 'function') {
+          // 获取目标消息ID（向上查找最近有AI消息且有变量的楼层）
+          let targetMessageId = 'latest';
+
+          if (typeof window.getLastMessageId === 'function' && typeof window.getChatMessages === 'function') {
+            let currentId = window.getLastMessageId();
+
+            // 向上查找AI消息（跳过用户消息）
+            while (currentId >= 0) {
+              const message = window.getChatMessages(currentId).at(-1);
+              if (message && message.role !== 'user') {
+                targetMessageId = currentId;
+                if (currentId !== window.getLastMessageId()) {
+                  console.log(`[Task App] 📝 向上查找到第 ${currentId} 层的AI消息`);
+                }
+                break;
+              }
+              currentId--;
+            }
+
+            if (currentId < 0) {
+              targetMessageId = 'latest';
+              console.warn('[Task App] ⚠️ 没有找到AI消息，使用最后一层');
+            }
+          }
+
+          console.log('[Task App] 使用消息ID:', targetMessageId);
+
+          // 获取变量
+          const mvuData = window.Mvu.getMvuData({ type: 'message', message_id: targetMessageId });
+          console.log('[Task App] 从 Mvu 获取变量数据:', mvuData);
+          console.log('[Task App] stat_data 存在:', !!mvuData?.stat_data);
+          if (mvuData?.stat_data) {
+            console.log('[Task App] stat_data 的键:', Object.keys(mvuData.stat_data));
+            console.log('[Task App] 任务是否存在:', !!mvuData.stat_data['任务']);
+            if (mvuData.stat_data['任务']) {
+              console.log('[Task App] 任务数据:', mvuData.stat_data['任务']);
+            }
+          }
+
+          // 尝试从 stat_data 读取
+          if (mvuData && mvuData.stat_data && mvuData.stat_data['任务']) {
+            const taskData = mvuData.stat_data['任务'];
+            console.log('[Task App] ✅ 从 stat_data 获取到任务数据:', taskData);
+            return this.parseTaskData(taskData);
+          }
+
+          // 尝试从根级别读取（如果变量不在 stat_data 中）
+          if (mvuData && mvuData['任务']) {
+            const taskData = mvuData['任务'];
+            console.log('[Task App] ✅ 从根级别获取到任务数据:', taskData);
+            return this.parseTaskData(taskData);
+          }
+
+          // 如果 stat_data 为空但 variables 存在，尝试从 variables 获取
+          if (mvuData && !mvuData.stat_data && window.SillyTavern) {
+            const context = window.SillyTavern.getContext ? window.SillyTavern.getContext() : window.SillyTavern;
+            if (context && context.chatMetadata && context.chatMetadata.variables) {
+              const stat_data = context.chatMetadata.variables['stat_data'];
+              if (stat_data && stat_data['任务']) {
+                console.log('[Task App] 从 variables.stat_data 获取任务数据');
+                return this.parseTaskData(stat_data['任务']);
+              }
+            }
           }
         }
 
-        // 如果没有mobileContextEditor，尝试其他方式
-        const chatData = this.getChatData();
-        if (chatData && chatData.length > 0) {
-          const allContent = chatData.map(msg => msg.mes || '').join('\n');
-          return this.parseTaskContent(allContent);
+        // 方法2: 尝试从 SillyTavern 的上下文获取（备用）
+        if (window.SillyTavern) {
+          const context = window.SillyTavern.getContext ? window.SillyTavern.getContext() : window.SillyTavern;
+          if (context && context.chatMetadata && context.chatMetadata.variables) {
+            // 尝试从 variables.stat_data 获取
+            const stat_data = context.chatMetadata.variables['stat_data'];
+            if (stat_data && stat_data['任务']) {
+              console.log('[Task App] 从 context.chatMetadata.variables.stat_data 获取任务数据');
+              return this.parseTaskData(stat_data['任务']);
+            }
+
+            // 尝试直接从 variables 获取
+            const taskData = context.chatMetadata.variables['任务'];
+            if (taskData && typeof taskData === 'object') {
+              console.log('[Task App] 从 context.chatMetadata.variables 获取任务数据');
+              return this.parseTaskData(taskData);
+            }
+          }
         }
+
+        console.log('[Task App] 未找到任务数据');
       } catch (error) {
         console.warn('[Task App] 获取任务数据失败:', error);
       }
@@ -253,81 +281,64 @@ if (typeof window.TaskApp === 'undefined') {
     }
 
     /**
-     * 从消息中实时解析任务内容
+     * 解析任务数据
+     * 任务结构：{ t001: {任务名称: [值, ''], 任务状态: [值, ''], 任务描述: [值, ''], 奖励: [值, '']}, ... }
+     * 任务状态：未接受/进行中/已完成
      */
-    parseTaskContent(content) {
+    parseTaskData(taskData) {
       const tasks = [];
-      const acceptedTasks = [];
-      const completedTasks = [];
+      const acceptedTaskIds = [];
+      const completedTaskIds = [];
 
-      // 解析任务格式: [任务|{{任务编号，例如r101}}|{{任务名称}}|{{任务介绍}}|{{发布人}}|{{奖励}}]
-      const taskRegex = /\[任务\|([^\|]+)\|([^\|]+)\|([^\|]+)\|([^\|]+)\|([^\]]+)\]/g;
+      try {
+        // 遍历任务中的所有任务
+        Object.keys(taskData).forEach(taskKey => {
+          // 跳过元数据
+          if (taskKey === '$meta') return;
 
-      let taskMatch;
-      while ((taskMatch = taskRegex.exec(content)) !== null) {
-        const [fullMatch, id, name, description, publisher, reward] = taskMatch;
+          const task = taskData[taskKey];
+          if (!task || typeof task !== 'object') return;
 
-        // 检查是否已存在相同任务
-        const existingTask = tasks.find(t => t.id.trim() === id.trim());
+          // 提取任务数据（变量格式：[值, 描述]）
+          const getValue = (field) => task[field] && Array.isArray(task[field]) ? task[field][0] : '';
 
-        if (!existingTask) {
-          const newTask = {
-            id: id.trim(),
-            name: name.trim(),
-            description: description.trim(),
-            publisher: publisher.trim(),
-            reward: reward.trim(),
+          const taskName = getValue('任务名称') || taskKey;
+          const taskDescription = getValue('任务描述') || '';
+          const taskStatus = getValue('任务状态') || '未接受';
+          const taskReward = getValue('奖励') || '';
+
+          if (!taskName) return;
+
+          // 根据状态确定任务状态
+          let status = 'available';
+          if (taskStatus === '进行中') {
+            status = 'inProgress';
+            acceptedTaskIds.push(taskKey);
+          } else if (taskStatus === '已完成') {
+            status = 'completed';
+            completedTaskIds.push(taskKey);
+          }
+
+          tasks.push({
+            id: taskKey,
+            name: taskName,
+            description: taskDescription,
+            publisher: '系统',
+            reward: taskReward,
+            status: status,
             timestamp: new Date().toLocaleString(),
-            status: 'available',
-          };
-          tasks.push(newTask);
-        }
+          });
+        });
+
+        console.log('[Task App] 从任务解析完成，任务数:', tasks.length);
+        console.log('[Task App] 未接受:', tasks.filter(t => t.status === 'available').length);
+        console.log('[Task App] 进行中:', acceptedTaskIds.length);
+        console.log('[Task App] 已完成:', completedTaskIds.length);
+      } catch (error) {
+        console.error('[Task App] 解析任务数据失败:', error);
       }
 
-      // 解析接受任务格式: [接受任务|{{任务编号}}|...] 或 [接受任务|{{任务编号}}]
-      const acceptTaskRegex = /\[接受任务\|([^\|\]]+)/g;
-      let acceptMatch;
-      while ((acceptMatch = acceptTaskRegex.exec(content)) !== null) {
-        const taskId = acceptMatch[1].trim();
-        if (!acceptedTasks.includes(taskId)) {
-          acceptedTasks.push(taskId);
-        }
-      }
-
-      // 解析完成任务格式: [完成任务|{{任务编号}}|...] 或 [完成任务|{{任务编号}}]
-      const completeTaskRegex = /\[完成任务\|([^\|\]]+)/g;
-      let completeMatch;
-      while ((completeMatch = completeTaskRegex.exec(content)) !== null) {
-        const taskId = completeMatch[1].trim();
-        if (!completedTasks.includes(taskId)) {
-          completedTasks.push(taskId);
-        }
-      }
-
-      console.log(
-        '[Task App] 解析完成，任务数:',
-        tasks.length,
-        '已接受:',
-        acceptedTasks.length,
-        '已完成:',
-        completedTasks.length,
-      );
-
-      // 添加详细的调试信息
-      if (tasks.length > 0) {
-        console.log(
-          '[Task App] 任务详情:',
-          tasks.map(t => `${t.id}: ${t.name}`),
-        );
-      }
-      if (acceptedTasks.length > 0) {
-        console.log('[Task App] 已接受任务:', acceptedTasks);
-      }
-      if (completedTasks.length > 0) {
-        console.log('[Task App] 已完成任务:', completedTasks);
-      }
-
-      return { tasks, acceptedTasks, completedTasks };
+      return { tasks, acceptedTasks: acceptedTaskIds, completedTasks: completedTaskIds };
     }
 
     // 检查任务是否有变化
@@ -398,6 +409,13 @@ if (typeof window.TaskApp === 'undefined') {
 
     // 获取应用内容
     getAppContent() {
+      // 每次打开应用时重新解析一次数据（确保显示最新内容）
+      const taskData = this.getCurrentTaskData();
+      if (taskData.tasks.length !== this.tasks.length || this.hasTasksChanged(taskData.tasks)) {
+        this.tasks = taskData.tasks;
+        console.log('[Task App] 📋 打开应用时更新任务数据，任务数:', this.tasks.length);
+      }
+
       switch (this.currentView) {
         case 'taskList':
           return this.renderTaskList();
@@ -699,40 +717,126 @@ if (typeof window.TaskApp === 'undefined') {
       );
     }
 
-    // 接受任务
-    acceptTask(taskId) {
+    // 接受任务（直接操作变量）
+    async acceptTask(taskId) {
       console.log('[Task App] 接受任务:', taskId);
 
-      const task = this.tasks.find(t => t.id === taskId);
-      if (task) {
-        const message = `[接受任务|${task.id}|${task.name}|${task.description}|${task.publisher}|${task.reward}]`;
-        this.sendToSillyTavern(message);
+      const task = this.tasks.find(t => t.id === taskId && t.status === 'available');
+      if (!task) {
+        this.showToast('任务不存在或已接受', 'warning');
+        return;
+      }
+
+      try {
+        // 直接操作Mvu变量
+        await this.acceptTaskDirectly(task);
+
         this.showToast('任务接受成功！', 'success');
 
-        // 立即更新状态
-        if (!this.acceptedTasks.includes(taskId)) {
-          this.acceptedTasks.push(taskId);
-          this.updateAppContent();
-        }
-
-        // 设置定时检查，等待AI回复后更新状态
-        this.scheduleTaskStatusCheck(taskId, 'accepted');
+        // 刷新任务列表
+        this.refreshTasksData();
+      } catch (error) {
+        console.error('[Task App] 接受任务失败:', error);
+        this.showToast('接受任务失败: ' + error.message, 'error');
       }
     }
 
-    // 安排任务状态检查
-    scheduleTaskStatusCheck(taskId, action) {
-      console.log(`[Task App] 安排任务状态检查: ${taskId} (${action})`);
+    // 直接操作Mvu变量接受任务（修改任务状态）
+    async acceptTaskDirectly(task) {
+      try {
+        console.log('[Task App] 开始直接更新变量...');
 
-      // 5秒后再次检查
-      setTimeout(() => {
-        this.parseTasksFromContext();
-      }, 5000);
+        // 获取目标消息ID
+        let targetMessageId = 'latest';
+        if (typeof window.getLastMessageId === 'function' && typeof window.getChatMessages === 'function') {
+          let currentId = window.getLastMessageId();
+          while (currentId >= 0) {
+            const message = window.getChatMessages(currentId).at(-1);
+            if (message && message.role !== 'user') {
+              targetMessageId = currentId;
+              break;
+            }
+            currentId--;
+          }
+        }
 
-      // 10秒后最后检查
-      setTimeout(() => {
-        this.parseTasksFromContext();
-      }, 10000);
+        // 获取Mvu数据
+        const mvuData = window.Mvu.getMvuData({ type: 'message', message_id: targetMessageId });
+        if (!mvuData || !mvuData.stat_data) {
+          throw new Error('无法获取Mvu变量数据');
+        }
+
+        // 确保任务存在
+        if (!mvuData.stat_data['任务']) {
+          throw new Error('任务系统不存在');
+        }
+
+        const taskKey = task.id;
+
+        // 1. 修改任务状态为"进行中"
+        await window.Mvu.setMvuVariable(mvuData, `任务.${taskKey}.任务状态[0]`, '进行中', {
+          reason: `接受任务：${task.name}`,
+          is_recursive: false
+        });
+        console.log(`[Task App] ✅ 任务状态更新: ${taskKey} -> 进行中`);
+
+        // 2. 不再记录历史（由AI生成摘要代替）
+        // 接受任务操作将在AI回复的摘要中体现
+
+        // 保存更新
+        await window.Mvu.replaceMvuData(mvuData, { type: 'message', message_id: targetMessageId });
+
+        console.log('[Task App] ✅ 变量更新完成');
+      } catch (error) {
+        console.error('[Task App] 更新变量失败:', error);
+        throw error;
+      }
+    }
+
+    // 获取当前游戏时间（向上楼层查找AI消息）
+    getCurrentGameTime() {
+      try {
+        // 使用 Mvu 框架获取变量（向上查找AI消息）
+        if (window.Mvu && typeof window.Mvu.getMvuData === 'function') {
+          let targetMessageId = 'latest';
+
+          if (typeof window.getLastMessageId === 'function' && typeof window.getChatMessages === 'function') {
+            let currentId = window.getLastMessageId();
+            while (currentId >= 0) {
+              const message = window.getChatMessages(currentId).at(-1);
+              if (message && message.role !== 'user') {
+                targetMessageId = currentId;
+                break;
+              }
+              currentId--;
+            }
+          }
+
+          const mvuData = window.Mvu.getMvuData({ type: 'message', message_id: targetMessageId });
+          if (mvuData && mvuData.stat_data && mvuData.stat_data['家族信息']) {
+            const familyInfo = mvuData.stat_data['家族信息'];
+            if (familyInfo.当前时间 && Array.isArray(familyInfo.当前时间)) {
+              const timeValue = familyInfo.当前时间[0];
+              if (timeValue) return timeValue;
+            }
+          }
+        }
+
+        // 备用方法：从 SillyTavern context 获取
+        if (window.SillyTavern) {
+          const context = window.SillyTavern.getContext ? window.SillyTavern.getContext() : window.SillyTavern;
+          if (context && context.chatMetadata && context.chatMetadata.variables) {
+            const familyInfo = context.chatMetadata.variables['家族信息'];
+            if (familyInfo && familyInfo.当前时间 && Array.isArray(familyInfo.当前时间)) {
+              const timeValue = familyInfo.当前时间[0];
+              if (timeValue) return timeValue;
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[Task App] 获取游戏时间失败:', error);
+      }
+      return '未知时间';
     }
 
     // 切换视图
@@ -763,7 +867,7 @@ if (typeof window.TaskApp === 'undefined') {
       try {
         console.log('[Task App] 发送查看任务消息');
 
-        const message = '查看任务';
+        const message = '<Request:Meta-instructions：接下来你要，按照当前剧情，输出至少3个任务,注意更新对应变量,不要输出重复的任务，注意更新任务变量>查看任务';
 
         // 使用与消息app相同的发送方式
         this.sendToSillyTavern(message);
@@ -849,10 +953,13 @@ if (typeof window.TaskApp === 'undefined') {
     destroy() {
       console.log('[Task App] 销毁应用，清理资源');
 
-      // 清理定时器
-      if (this.contextCheckInterval) {
-        clearInterval(this.contextCheckInterval);
-        this.contextCheckInterval = null;
+      // 清理事件监听
+      if (this.eventListenersSetup && this.messageReceivedHandler) {
+        const eventSource = window['eventSource'];
+        if (eventSource && eventSource.removeListener) {
+          eventSource.removeListener('MESSAGE_RECEIVED', this.messageReceivedHandler);
+          console.log('[Task App] 🗑️ 已移除 MESSAGE_RECEIVED 事件监听');
+        }
       }
 
       // 重置状态
@@ -1006,7 +1113,7 @@ window.taskAppForceReload = function () {
 
   // 创建新实例
   window.taskApp = new TaskApp();
-  console.log('[Task App] ✅ 应用已重新加载 - 版本 2.0');
+  console.log('[Task App] ✅ 应用已重新加载 - 版本 3.0');
 };
 
 window.taskAppForceRefresh = function () {
@@ -1046,4 +1153,4 @@ window.taskAppTestTabs = function () {
   }
 };
 
-console.log('[Task App] 任务应用模块加载完成 - 版本 2.0');
+console.log('[Task App] 任务应用模块加载完成 - 版本 3.0 (事件驱动 + 族会目标 + 直接操作变量)');
